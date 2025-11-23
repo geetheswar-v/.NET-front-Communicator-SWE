@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using System;
 using System.Text;
 using System.Net;
 using Communicator.Core.RPC;
@@ -132,13 +133,27 @@ public class NetworkFront : IController, INetworking
      */
     public void NetworkFrontCallSubscriber(byte[] data)
     {
-        if (data.Length < 4) return;
+        if (data.Length < 4)
+        {
+            Console.WriteLine($"[NetworkFront] Error: Received data too short ({data.Length} bytes)");
+            return;
+        }
+        
         MemoryStream buffer = new MemoryStream(data);
         BinaryReader reader = new BinaryReader(buffer);
         int module = IPAddress.NetworkToHostOrder(reader.ReadInt32());
         byte[] newData = reader.ReadBytes(data.Length - 4);
-        IMessageListener function = _listeners.GetValueOrDefault(module);
-        function?.ReceiveData(newData);
+        
+        Console.WriteLine($"[NetworkFront] NetworkFrontCallSubscriber called for module {module} with {newData.Length} bytes");
+
+        if (_listeners.TryGetValue(module, out IMessageListener? function))
+        {
+            function.ReceiveData(newData);
+        }
+        else
+        {
+            Console.WriteLine($"[NetworkFront] Warning: No listener found for module {module}");
+        }
     }
 
     public void CloseNetworking()
@@ -153,6 +168,7 @@ public class NetworkFront : IController, INetworking
 
         // Subscribe to the multiplexed callback from Java
         _moduleRpc.Subscribe("networkFrontCallSubscriber", (byte[] data) => {
+            Console.WriteLine($"[NetworkFront] Received networkFrontCallSubscriber call with {data.Length} bytes");
             NetworkFrontCallSubscriber(data);
             return new byte[0];
         });
@@ -170,13 +186,9 @@ public class NetworkFront : IController, INetworking
         foreach (int moduleId in _registeredModules)
         {
              string callbackName = "callback" + moduleId;
-             _moduleRpc.Subscribe(callbackName, (byte[] args) => {
-                if (_listeners.TryGetValue(moduleId, out IMessageListener? listener))
-                {
-                    listener.ReceiveData(args);
-                }
-                return new byte[0];
-            });
+             // We don't need to subscribe to callbackName here because Java calls networkFrontCallSubscriber
+             // But we keep the subscription just in case legacy code uses it, or to satisfy the interface if needed.
+             // Actually, let's just ensure we send the subscription request to Java.
             
             // Send subscription to backend
             byte[] args = BitConverter.GetBytes(IPAddress.HostToNetworkOrder(moduleId));
