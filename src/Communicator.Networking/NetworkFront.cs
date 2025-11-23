@@ -68,17 +68,20 @@ public class NetworkFront : IController, INetworking
         if (_registeredModules.Contains(moduleId)) return;
 
         string callbackName = "callback" + moduleId;
-        _moduleRpc.Subscribe(callbackName, (byte[] args) => {
-            if (_listeners.TryGetValue(moduleId, out IMessageListener? listener))
-            {
-                listener.ReceiveData(args);
-            }
-            else
-            {
-                Console.WriteLine($"[NetworkFront] Received data for module {moduleId} but no listener subscribed.");
-            }
-            return new byte[0];
-        });
+        if (_moduleRpc != null)
+        {
+            _moduleRpc.Subscribe(callbackName, (byte[] args) => {
+                if (_listeners.TryGetValue(moduleId, out IMessageListener? listener))
+                {
+                    listener.ReceiveData(args);
+                }
+                else
+                {
+                    Console.WriteLine($"[NetworkFront] Received data for module {moduleId} but no listener subscribed.");
+                }
+                return new byte[0];
+            });
+        }
         _registeredModules.Add(moduleId);
     }
 
@@ -147,12 +150,36 @@ public class NetworkFront : IController, INetworking
     public void ConsumeRPC(IRPC rpc)
     {
         _moduleRpc = rpc;
+
+        // Subscribe to the multiplexed callback from Java
+        _moduleRpc.Subscribe("networkFrontCallSubscriber", (byte[] data) => {
+            NetworkFrontCallSubscriber(data);
+            return new byte[0];
+        });
+
         foreach (KeyValuePair<int, IMessageListener> listener in _listeners)
         {
             int key = listener.Key;
-            byte[] args = BitConverter.GetBytes(key);
+            byte[] args = BitConverter.GetBytes(IPAddress.HostToNetworkOrder(key));
 
             // Call the RPC method asynchronously
+            _moduleRpc.Call("networkRPCSubscribe", args);
+        }
+        
+        // Also register any modules that were pre-registered
+        foreach (int moduleId in _registeredModules)
+        {
+             string callbackName = "callback" + moduleId;
+             _moduleRpc.Subscribe(callbackName, (byte[] args) => {
+                if (_listeners.TryGetValue(moduleId, out IMessageListener? listener))
+                {
+                    listener.ReceiveData(args);
+                }
+                return new byte[0];
+            });
+            
+            // Send subscription to backend
+            byte[] args = BitConverter.GetBytes(IPAddress.HostToNetworkOrder(moduleId));
             _moduleRpc.Call("networkRPCSubscribe", args);
         }
     }
